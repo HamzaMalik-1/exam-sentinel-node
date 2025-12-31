@@ -6,8 +6,8 @@ const router = express.Router();
 
 // ✅ Ensure 'authorize' is included in the destructuring here
 const { protect, authorize } = require('../middlewares/authMiddleware'); 
-const { getClassExamResults } = require('../controllers/teacherController');
+const { getClassExamResults, getDetailedClassResults } = require('../controllers/teacherController');
 
 router.get('/exam-results', protect, authorize('teacher', 'admin'), getClassExamResults);
-
+router.get('/class-results/:resultId', protect, authorize('teacher', 'admin'), getDetailedClassResults);
 module.exports = router;
