@@ -7,69 +7,63 @@ const { BadRequestError, NotFoundError } = require("../utils/ErrorHelpers/Errors
 const sendResponse = require("../utils/ResponseHelpers/sendResponse");
 const { StatusCodes } = require("http-status-codes");
 const Exam = require("../models/Exam");
-
+const mongoose = require("mongoose"); // Required for ObjectId conversion
 // @desc    Get all exams assigned to the student's enrolled classes
 const getMyExams = asyncHandler(async (req, res) => {
     const studentId = req.user._id;
 
-    // 1. Find all active class enrollments for this student
+    // 1. Find the student's active enrollment
     const enrollments = await Enrollment.find({ 
         studentId: studentId, 
         status: "active" 
     }).select('classId');
 
     if (!enrollments || enrollments.length === 0) {
-        return sendResponse(res, StatusCodes.OK, "No enrollments found", []);
+        return sendResponse(res, StatusCodes.OK, "No active enrollments found", []);
     }
 
-    // 2. Extract Class IDs (Ensuring they are ObjectIds)
-    const classIds = enrollments.map(enroll => enroll.classId);
+    // 2. Convert string IDs to ObjectIds to ensure the $in query works correctly
+    const classIds = enrollments.map(e => new mongoose.Types.ObjectId(e.classId));
 
-    // 3. Fetch exams assigned to these classes
-    // Added a check to ensure examId exists and is not null
+    // 3. Fetch exams assigned to those classes
     const assignments = await AssignedExam.find({ 
         classId: { $in: classIds },
-        // If your AssignedExam schema doesn't have isDeleted, remove this line
-        // isDeleted: false 
+        // Ensure you aren't filtering out active exams accidentally
+        // isDeleted: false // Only keep this if your schema actually has this field
     })
     .populate({
         path: 'examId',
-        select: 'title timeLimit', // Changed 'duration' to 'timeLimit' to match your data
+        select: 'title timeLimit',
     })
-    .populate('classId', 'className')
-    .sort({ startTime: 1 });
+    .populate('classId', 'className');
 
-    // 4. Format data
+    // 4. Format and check Result status
     const formattedExams = await Promise.all(assignments.map(async (item) => {
-        if (!item.examId) return null; // Skip if exam was deleted but assignment remains
+        // Skip formatting if the exam document no longer exists (orphaned assignment)
+        if (!item.examId) return null;
 
         const completedRecord = await Result.findOne({ 
-            examId: item.examId._id, 
-            studentId: studentId 
+            exam: item.examId._id, 
+            student: studentId 
         });
 
         return {
-            id: item.examId._id, // Use the Exam ID for navigation
+            id: item.examId._id,
             assignmentId: item._id,
-            className: item.classId?.className || "Unknown Class",
-            testName: item.examId.title,
-            timeLimit: item.examId.timeLimit || 0, // Matches your data field 'timeLimit'
+            className: item.classId?.className || "N/A",
+            testName: item.examId?.title || "Untitled Test",
+            timeLimit: item.examId?.timeLimit || 0,
             startDate: item.startTime,
             endDate: item.endTime,
-            isAttempted: !!completedRecord,
+            isAttempted: !!completedRecord, 
             isExamContinue: true 
         };
     }));
 
-    // Filter out any null entries from skipped orphaned assignments
+    // 5. Filter out null values from the array
     const finalData = formattedExams.filter(exam => exam !== null);
 
-    return sendResponse(
-        res, 
-        StatusCodes.OK, 
-        "Assigned exams fetched successfully", 
-        finalData
-    );
+    return sendResponse(res, StatusCodes.OK, "Exams fetched successfully", finalData);
 });
 
 // @desc    Register student to a class via Intermediate Table
@@ -126,4 +120,93 @@ const getExamInfo = asyncHandler(async (req, res) => {
     });
 });
 
-module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo};
+
+// @desc    Get Specific Exam for Taking Test
+// @route   GET /api/student/take-exam/:id
+const getExamForTaking = asyncHandler(async (req, res) => {
+    // 1. Fetch the exam from the database
+    const exam = await Exam.findById(req.params.id)
+        .select('title timeLimit questions description')
+        .lean();
+
+    if (!exam) {
+        return res.status(StatusCodes.NOT_FOUND).json({ 
+            success: false, 
+            message: "Exam not found" 
+        });
+    }
+
+    // 2. Format the data for the frontend
+    const formattedData = {
+        id: exam._id,
+        title: exam.title,
+        duration: exam.timeLimit,
+        studentName: `${req.user.firstName} ${req.user.lastName}`,
+        questions: exam.questions.map(q => ({
+            id: q._id,
+            type: q.type,
+            // ✅ FIX: Use q.question because that is the key in your database
+            question: q.question, 
+            options: q.options || []
+        }))
+    };
+
+    return sendResponse(res, StatusCodes.OK, "Exam fetched successfully", formattedData);
+});
+// @desc    Submit Exam and Grade via AI
+// @route   POST /api/student/submit-exam
+const submitExam = asyncHandler(async (req, res) => {
+    const { examId, answers } = req.body;
+    const studentId = req.user._id;
+
+    // 1. Fetch Exam and Enrollment to get the Class ID
+    const exam = await Exam.findById(examId);
+    const enrollment = await Enrollment.findOne({ studentId, status: 'active' });
+
+    if (!exam) return res.status(StatusCodes.NOT_FOUND).json({ success: false, message: "Exam not found" });
+
+    let totalObtainedMarks = 0;
+    const totalPossibleMarks = exam.questions.length;
+    const studentResponses = [];
+
+    // 2. Grade Objective Questions
+    exam.questions.forEach((q) => {
+        const studentAns = answers[q._id];
+        let isCorrect = false;
+        let marks = 0;
+
+        if (q.type === "radio" || q.type === "checkbox") {
+            isCorrect = JSON.stringify(studentAns) === JSON.stringify(q.correctAnswer);
+            marks = isCorrect ? 1 : 0; // Assuming 1 mark per question
+        } 
+        // Open-end questions default to 0 marks for now
+        
+        totalObtainedMarks += marks;
+
+        studentResponses.push({
+            questionId: q._id,
+            questionText: q.question,
+            userAnswer: studentAns,
+            isCorrect: isCorrect,
+            obtainedMarks: marks,
+        });
+    });
+
+    const percentage = (totalObtainedMarks / totalPossibleMarks) * 100;
+
+    // 3. Create Result Document using your schema
+    const result = await Result.create({
+        student: studentId,
+        exam: examId,
+        class: enrollment ? enrollment.classId : null,
+        obtainedMarks: totalObtainedMarks,
+        totalMarks: totalPossibleMarks,
+        percentage: percentage,
+        status: percentage >= 50 ? "Passed" : "Failed",
+        responses: studentResponses
+    });
+
+    res.status(StatusCodes.CREATED).json({ success: true, data: result });
+});
+
+module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo,getExamForTaking, submitExam};
