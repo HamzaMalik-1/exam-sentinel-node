@@ -1,0 +1,13 @@
+// routes/studentRouter.js
+const express = require('express');
+const router = express.Router();
+const { getMyExams, registerInClass, getStudentProfile } = require('../controllers/studentExamController');
+const { protect } = require('../middlewares/authMiddleware');
+
+router.use(protect);
+
+router.get('/my-exams', getMyExams);
+router.get('/profile', getStudentProfile);
+router.post('/register-class', registerInClass);
+
+module.exports = router;

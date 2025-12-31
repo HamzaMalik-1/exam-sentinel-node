@@ -59,8 +59,34 @@ const getClasses = asyncHandler(async (req, res) => {
     return sendResponse(res, StatusCodes.OK, "Classes fetched successfully", formattedClasses);
 });
 
+
+
+// @desc    Get all active classes with teacher names for student dropdown
+// @route   GET /api/dropdown/classes
+const getAllClassesForDropdown = asyncHandler(async (req, res) => {
+    // 1. Fetch classes and populate teacher details
+    const classes = await Class.find({ isDeleted: false })
+        .populate('teacher', 'firstName lastName') 
+        .select('className teacher');
+
+    // 2. Map to standard dropdown format
+    const formattedClasses = classes.map(cls => {
+        const teacherName = cls.teacher 
+            ? `${cls.teacher.firstName} ${cls.teacher.lastName}` 
+            : "No Teacher Assigned";
+
+        return {
+            label: `${cls.className} - ${teacherName}`, // Combined name
+            value: cls._id
+        };
+    });
+
+    return sendResponse(res, StatusCodes.OK, "Classes fetched", formattedClasses);
+});
+
 module.exports = {
   getSubjects,
   getTeachers,
-  getClasses
+  getClasses,
+  getAllClassesForDropdown
 };
