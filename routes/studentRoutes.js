@@ -6,7 +6,7 @@ const { protect } = require('../middlewares/authMiddleware');
 
 router.use(protect);
 
-router.get('/my-exams', getMyExams);
+router.get('/my-exams', protect, getMyExams);
 router.get('/profile', getStudentProfile);
 router.post('/register-class', registerInClass);
 

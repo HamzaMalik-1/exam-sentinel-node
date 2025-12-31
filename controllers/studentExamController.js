@@ -11,44 +11,48 @@ const { StatusCodes } = require("http-status-codes");
 const getMyExams = asyncHandler(async (req, res) => {
     const studentId = req.user._id;
 
-    // 1. Find all active enrollments for this student
+    // 1. Find all active class enrollments for this student
     const enrollments = await Enrollment.find({ 
-        studentId, 
+        studentId: studentId, 
         status: "active" 
     }).select('classId');
 
     if (!enrollments || enrollments.length === 0) {
-        throw new NotFoundError("Student is not enrolled in any class.");
+        return sendResponse(res, StatusCodes.OK, "No enrollments found", []);
     }
 
-    // 2. Extract class IDs into an array
+    // 2. Extract Class IDs (Ensuring they are ObjectIds)
     const classIds = enrollments.map(enroll => enroll.classId);
 
-    // 3. Fetch exams assigned to ANY of those class IDs
+    // 3. Fetch exams assigned to these classes
+    // Added a check to ensure examId exists and is not null
     const assignments = await AssignedExam.find({ 
         classId: { $in: classIds },
-        isDeleted: false 
+        // If your AssignedExam schema doesn't have isDeleted, remove this line
+        // isDeleted: false 
     })
     .populate({
         path: 'examId',
-        select: 'title duration',
-        populate: { path: 'subjectId', select: 'name' }
+        select: 'title timeLimit', // Changed 'duration' to 'timeLimit' to match your data
     })
     .populate('classId', 'className')
     .sort({ startTime: 1 });
 
-    // 4. Check for existing results to determine completion
+    // 4. Format data
     const formattedExams = await Promise.all(assignments.map(async (item) => {
+        if (!item.examId) return null; // Skip if exam was deleted but assignment remains
+
         const completedRecord = await Result.findOne({ 
-            examId: item.examId?._id, 
+            examId: item.examId._id, 
             studentId: studentId 
         });
 
         return {
-            id: item._id,
-            className: item.classId?.className,
-            testName: item.examId?.title,
-            timeLimit: item.examId?.duration || 0,
+            id: item.examId._id, // Use the Exam ID for navigation
+            assignmentId: item._id,
+            className: item.classId?.className || "Unknown Class",
+            testName: item.examId.title,
+            timeLimit: item.examId.timeLimit || 0, // Matches your data field 'timeLimit'
             startDate: item.startTime,
             endDate: item.endTime,
             isAttempted: !!completedRecord,
@@ -56,7 +60,15 @@ const getMyExams = asyncHandler(async (req, res) => {
         };
     }));
 
-    return sendResponse(res, StatusCodes.OK, "Student exams fetched successfully", formattedExams);
+    // Filter out any null entries from skipped orphaned assignments
+    const finalData = formattedExams.filter(exam => exam !== null);
+
+    return sendResponse(
+        res, 
+        StatusCodes.OK, 
+        "Assigned exams fetched successfully", 
+        finalData
+    );
 });
 
 // @desc    Register student to a class via Intermediate Table
