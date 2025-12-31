@@ -1,28 +1,22 @@
-const jwt = require('jsonwebtoken'); // ✅ Missing import
-const User = require('../models/User'); // ✅ Missing import
+const jwt = require('jsonwebtoken');
+const User = require('../models/User');
 const asyncHandler = require("../utils/AsyncHelper/Async");
-const { UnauthorizedError } = require("../utils/ErrorHelpers/Errors");
+const { UnauthorizedError, ForbiddenError } = require("../utils/ErrorHelpers/Errors");
 
+// Middleware to protect routes (Authentication)
 const protect = asyncHandler(async (req, res, next) => {
     let token;
 
-    // 1. Check for the header
     if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-        // The split ensures we get the part after "Bearer "
         token = req.headers.authorization.split(' ')[1]; 
     }
 
-    // 2. Verify token exists
     if (!token) {
         throw new UnauthorizedError('Not authorized to access this route');
     }
 
     try {
-        // 3. Verify the token using your secret
         const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
-        // 4. Attach the user to the request object
-        // This makes `req.user` available in your controllers
         req.user = await User.findById(decoded.id).select('-password');
 
         if (!req.user) {
@@ -31,9 +25,24 @@ const protect = asyncHandler(async (req, res, next) => {
 
         next();
     } catch (error) {
-        // Handles expired or tampered tokens
         throw new UnauthorizedError('Token is invalid or expired');
     }
 });
 
-module.exports = { protect }; // ✅ Export as an object to match your route imports
+// ✅ ADD THIS: Middleware for Role-Based Access Control (Authorization)
+const authorize = (...roles) => {
+    return (req, res, next) => {
+        // req.user is set by the 'protect' middleware which runs first
+        if (!req.user || !roles.includes(req.user.role)) {
+            // Note: If you don't have ForbiddenError, use a standard error or 403 status
+            return res.status(403).json({
+                success: false,
+                message: `User role ${req.user?.role} is not authorized to access this route`
+            });
+        }
+        next();
+    };
+};
+
+// ✅ Ensure BOTH are exported in the object
+module.exports = { protect, authorize };
