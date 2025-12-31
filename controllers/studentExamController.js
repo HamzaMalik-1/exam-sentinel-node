@@ -6,6 +6,7 @@ const asyncHandler = require("../utils/AsyncHelper/Async");
 const { BadRequestError, NotFoundError } = require("../utils/ErrorHelpers/Errors");
 const sendResponse = require("../utils/ResponseHelpers/sendResponse");
 const { StatusCodes } = require("http-status-codes");
+const Exam = require("../models/Exam");
 
 // @desc    Get all exams assigned to the student's enrolled classes
 const getMyExams = asyncHandler(async (req, res) => {
@@ -100,5 +101,29 @@ const getStudentProfile = asyncHandler(async (req, res) => {
         enrollments
     });
 });
+const getExamInfo = asyncHandler(async (req, res) => {
+    const exam = await Exam.findById(req.params.examId)
+        .populate('subjectId', 'name')
+        .select('title description timeLimit questions');
 
-module.exports = { getMyExams, registerInClass, getStudentProfile };
+    if (!exam) {
+        return res.status(404).json({ success: false, message: "Exam not found" });
+    }
+
+    // ✅ Get student name from the authenticated user (req.user)
+    const fullName = `${req.user.firstName} ${req.user.lastName}`;
+
+    res.status(200).json({
+        success: true,
+        data: {
+            title: exam.title,
+            subject: exam.subjectId?.name || "General",
+            timeLimit: exam.timeLimit, // ✅ Test Time
+            totalQuestions: exam.questions?.length || 0,
+            guidelines: exam.description, // ✅ Dynamic Guidelines
+            studentName: fullName // ✅ Student Name
+        }
+    });
+});
+
+module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo};
