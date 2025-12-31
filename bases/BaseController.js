@@ -1,4 +1,3 @@
-// backend/bases/BaseController.js
 const { StatusCodes } = require("http-status-codes");
 const { AlreadyExist, BadRequestError, NotFoundError } = require("../utils/ErrorHelpers/Errors");
 const ApiError = require("../utils/ErrorHelpers/ApiError");
@@ -16,7 +15,6 @@ class BaseController {
   requireFields(body, fields) {
     const missing = fields.filter((field) => !body[field]);
     if (missing.length > 0) {
-      // console.log(missing);
       throw new ApiError(StatusCodes.BAD_REQUEST, `Missing required fields: ${missing.join(", ")}`);
     }
   }
@@ -48,9 +46,7 @@ class BaseController {
   // --- Database Operations (Mongoose) ---
 
   async alreadyExist(filter, message = `${this.model.modelName} already exists`) {
-    // Mongoose: findOne(filter)
     const record = await this.model.findOne(filter);
-
     if (record) {
       throw new AlreadyExist(message);
     }
@@ -62,21 +58,26 @@ class BaseController {
   }
 
   async delete(filter) {
-    // Mongoose: findOneAndDelete or findOne then delete
     const record = await this.model.findOne(filter);
 
     if (!record) {
       throw new NotFoundError("Record not found to delete");
     }
 
-    await record.deleteOne(); // Mongoose document method
+    // ✅ FIX: Check if model supports Soft Delete (via plugin)
+    if (typeof record.softDelete === 'function') {
+      await record.softDelete();
+    } else {
+      // Fallback to Hard Delete if plugin is not attached
+      await record.deleteOne();
+    }
+
     return record;
   }
 
   async findOne(filter, message = "Record not found", populate = []) {
-    // Mongoose: Chaining .populate()
     let query = this.model.findOne(filter);
-    
+
     if (populate.length > 0) {
       populate.forEach(p => query.populate(p));
     }
@@ -103,14 +104,14 @@ class BaseController {
       paginate = false,
       page = 1,
       limit = 10,
-      sort = { createdAt: -1 }, // Mongoose sort format: { field: -1 } (desc) or 1 (asc)
-      populate = [], // Array of fields to populate
+      sort = { createdAt: -1 },
+      populate = [],
     } = options;
 
-    // Build the query
+    // Start Query
     let query = this.model.find(filter);
 
-    // Apply Sorting
+    // Apply Sort
     query = query.sort(sort);
 
     // Apply Population
@@ -123,10 +124,10 @@ class BaseController {
       const limitNum = parseInt(limit);
       const skip = (pageNum - 1) * limitNum;
 
-      // Execute query with skip/limit
+      // Execute Query with Pagination
       const data = await query.skip(skip).limit(limitNum);
       
-      // Get total count (separate query)
+      // Get Total Count (Separate Query)
       const total = await this.model.countDocuments(filter);
 
       return {
@@ -137,7 +138,7 @@ class BaseController {
       };
     }
 
-    // Return all if no pagination
+    // Return All
     const data = await query;
     return { data };
   }
