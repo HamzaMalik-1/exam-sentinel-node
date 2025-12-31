@@ -1,9 +1,12 @@
 const express = require('express');
 const router = express.Router();
-const { getSubjects, getTeachers } = require('../controllers/dropdownController');
+// Double check that dropdownController is in ../controllers/
+const { getSubjects, getTeachers, getClasses } = require('../controllers/dropdownController');
+// Double check the folder name is 'middlewares' (plural)
+const { protect } = require('../middlewares/authMiddleware');
 
-// Define the routes
 router.get('/subjects', getSubjects);
 router.get('/teachers', getTeachers);
+router.get('/classes', protect, getClasses);
 
 module.exports = router;
