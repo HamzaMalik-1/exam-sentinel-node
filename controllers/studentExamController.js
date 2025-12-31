@@ -306,9 +306,9 @@ const getResultDetails = asyncHandler(async (req, res) => {
         return res.status(StatusCodes.NOT_FOUND).json({ success: false, message: "Result not found" });
     }
 
-    // 2. Map responses and merge them with the Exam's question metadata (type and options)
+    // 2. Map responses and merge them with the Exam's question metadata (type, options, and correctness)
     const formattedResponses = result.responses.map(resp => {
-        // Find the matching question in the original exam to get its type and options
+        // Find the matching question in the original exam to get its structural metadata
         const originalQuestion = result.exam.questions.find(
             q => q._id.toString() === resp.questionId.toString()
         );
@@ -318,9 +318,11 @@ const getResultDetails = asyncHandler(async (req, res) => {
             questionId: resp.questionId,
             questionText: resp.questionText,
             userAnswer: resp.userAnswer,
+            // ✅ Crucial: Send the correct answer (stored in Result during submit) to the frontend
+            correctAnswer: resp.correctAnswer, 
             isCorrect: resp.isCorrect,
             obtainedMarks: resp.obtainedMarks,
-            // Fallback to "radio" if not found
+            // Use metadata from exam document for UI rendering
             type: originalQuestion ? originalQuestion.type : "radio",
             options: originalQuestion ? originalQuestion.options : []
         };
@@ -329,10 +331,20 @@ const getResultDetails = asyncHandler(async (req, res) => {
     const formattedData = {
         obtainedMarks: result.obtainedMarks,
         totalMarks: result.totalMarks,
-        exam: { title: result.exam?.title },
-        responses: formattedResponses // This array now contains 'type' and 'options'
+        percentage: result.percentage,
+        status: result.status,
+        exam: { 
+            title: result.exam?.title,
+            subject: result.exam?.subject
+        },
+        responses: formattedResponses 
     };
 
-    return sendResponse(res, StatusCodes.OK, "Result details fetched", formattedData);
+    // Replace sendResponse with your standard JSON return if necessary
+    return res.status(StatusCodes.OK).json({ 
+        success: true, 
+        message: "Result details fetched", 
+        data: formattedData 
+    });
 });
 module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo,getExamForTaking, submitExam,getMyResults,getResultDetails};
