@@ -209,4 +209,38 @@ const submitExam = asyncHandler(async (req, res) => {
     res.status(StatusCodes.CREATED).json({ success: true, data: result });
 });
 
-module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo,getExamForTaking, submitExam};
+const getMyResults = asyncHandler(async (req, res) => {
+    const studentId = req.user._id;
+
+    // Fetch results and populate related exam and class info
+    const results = await Result.find({ student: studentId })
+        .populate({
+            path: "exam",
+            select: "title", // Fetch the 'Test Name'
+        })
+        .populate({
+            path: "class",
+            select: "className", // Fetch the 'Class Name'
+        })
+        .sort({ submittedAt: -1 }); // Show most recent first
+
+    // Format data to match your frontend MOCK_COMPLETED_EXAMS structure
+    const formattedResults = results.map((record) => ({
+        id: record._id,
+        className: record.class?.className || "General",
+        testName: record.exam?.title || "Deleted Exam",
+        submissionDate: record.submittedAt.toISOString().split("T")[0], // Format: YYYY-MM-DD
+        obtainedMarks: record.obtainedMarks,
+        totalMarks: record.totalMarks,
+        percentage: record.percentage,
+        status: record.status,
+    }));
+
+    return sendResponse(
+        res,
+        StatusCodes.OK,
+        "Results fetched successfully",
+        formattedResults
+    );
+});
+module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo,getExamForTaking, submitExam,getMyResults};
