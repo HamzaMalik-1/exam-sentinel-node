@@ -1,114 +1,106 @@
 const asyncHandler = require("../utils/AsyncHelper/Async");
-const { BaseController } = require('./indexController');
-const { User } = require('../models/index');
-const { Op } = require("sequelize");
+const BaseController = require('../bases/BaseController'); // Ensure path is correct
+const User = require('../models/User'); // Direct Import
 const sendResponse = require("../utils/ResponseHelpers/sendResponse");
 const { StatusCodes } = require("http-status-codes");
-// const { use } = require("react");
-const transporter = require('../config/nodemailer');
-const { InternalServerError, UnauthorizedError, NotFoundError, BadRequestError } = require("../utils/ErrorHelpers/Errors");
+// const transporter = require('../config/nodemailer'); // Uncomment if using email
+const { BadRequestError, NotFoundError, UnauthorizedError } = require("../utils/ErrorHelpers/Errors");
 
+// Initialize BaseController with Mongoose Model
 const UserController = new BaseController(User);
 
+// Helper to generate token (if not defined in Model)
+const generateToken = (user) => {
+  const jwt = require('jsonwebtoken');
+  return jwt.sign({ id: user._id, role: user.role }, process.env.JWT_SECRET, { expiresIn: '30d' });
+};
+
+// --- SIGNUP ---
 exports.signup = asyncHandler(async (req, res) => {
-  // Check body exists
+  // 1. Validation
   UserController.bodyExist(req.body);
+  UserController.requireFields(req.body, ["firstName", "lastName", "email", "password"]); // Adjusted fields based on your User model
 
-  // Validate required fields
-  UserController.requireFields(req.body, ["username", "email", "password"]);
+  const { firstName, lastName, username, email, password, role } = req.body;
 
-  const { username, email, password } = req.body;
+  // 2. Check if User Exists (Using Mongoose $or operator)
+  // We check email OR username (if username is provided)
+  const conditions = [{ email }];
+  if (username) conditions.push({ username });
 
-  // Check for existing user
-  const filter = {
-    [Op.or]: [{ email }, { username }],
-  };
-  await UserController.alreadyExist(filter); // ✅ FIX: Add await
+  const filter = { $or: conditions };
+  
+  await UserController.alreadyExist(filter, "User with this email or username already exists");
 
-  // Create new user
-  const user = await UserController.create({ username, email, password });
+  // 3. Create User
+  // Note: Password hashing should happen in the User Model (pre-save hook) 
+  // or manually here if you prefer. assuming User model handles it or passed plain.
+  const user = await UserController.create({ 
+      firstName, 
+      lastName, 
+      username, 
+      email, 
+      password, // Ensure your User model hashes this!
+      role 
+  });
 
+  // 4. Generate Token
+  const token = generateToken(user);
+
+  // 5. Send Response
   res.status(StatusCodes.CREATED).json({
     success: true,
     message: "User registered successfully",
-    data: user,
+    data: {
+      _id: user._id,
+      email: user.email,
+      role: user.role,
+      token,
+    },
   });
 });
 
-exports.sendotp = asyncHandler(async (req, res) => {
-
-  UserController.bodyExist(req.body);
-  UserController.requireFields(req.body, ["email"]);
-
-  const { email } = req.body;
-
-  // Optional: Check if user exists (remove alreadyExist if you want to send OTP only to existing users)
-  const user = await UserController.findOne({ email },"Email not found"); // ✅ fixed filter
-
-  const otp = await user.sendOtp(); // Must be defined as instance method in User model
-
-  const mailOptions = {
-    from: `Your App Name`,
-    to: email,
-    subject: 'Your OTP Code',
-    text: `Your OTP code is: ${otp}`,
-    html: `<h3>Your OTP Code</h3><p><strong>${otp}</strong></p>`,
-  };
-
-  // await transporter.sendMail(mailOptions); // uncomment when ready
-  return res.status(StatusCodes.CREATED).json({
-    success: true,
-    message: "OTP sent to your email",
-  });
-});
-
-exports.verifyotp = asyncHandler( async (req,res)=>{
-
-      UserController.bodyExist(req.body);
-       UserController.requireFields(req.body, ["email","otp"]);
-
-  const { email,otp } = req.body;
-
-  const user = await UserController.findOne({ email },"Email not found"); // ✅ fixed filter
-const isVerified = await user.isVerifyOtp(otp);
-  if(isVerified)
-  {
-    return res.status(StatusCodes.CREATED).json({
-    success: true,
-    message: "OTP is verify",
-  });
-  }
-  else{
-    throw new UnauthorizedError("Otp is not correct")
-  }
-
-} )
-
+// --- LOGIN ---
 exports.login = asyncHandler(async (req, res) => {
   UserController.bodyExist(req.body);
 
   const { email, username, password } = req.body;
 
+  // 1. Validate Input
   if (!email && !username) {
     throw new BadRequestError("Either email or username is required");
   }
-
   UserController.requireFields(req.body, ["password"]);
 
+  // 2. Build Query (Mongoose $or)
   const conditions = [];
   if (email) conditions.push({ email });
   if (username) conditions.push({ username });
 
-  const filter = {
-    [Op.or]: conditions,
-  };
+  const filter = { $or: conditions };
 
-  const user = await UserController.findOne(filter, "Account not found");
+  // 3. Find User
+  // We explicitly select password because it might be 'select: false' in schema
+  const user = await User.findOne(filter).select('+password'); 
 
+  if (!user) {
+    throw new NotFoundError("Invalid email/username or password");
+  }
+
+  // 4. Check Password
+  // Assumes you have a 'comparePassword' method on your UserSchema
   const isMatch = await user.comparePassword(password);
+  
   if (!isMatch) {
     throw new NotFoundError("Invalid email/username or password");
   }
 
-  sendResponse(res, StatusCodes.OK,  "Login Successfully",user.dataValues);
+  // 5. Generate Token
+  const token = generateToken(user);
+
+  // 6. Send Response
+  const userData = user.toObject();
+  delete userData.password; // Remove password from response
+
+  sendResponse(res, StatusCodes.OK, "Login Successfully", { ...userData, token });
 });

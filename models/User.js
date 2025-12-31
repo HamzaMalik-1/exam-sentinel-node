@@ -1,9 +1,13 @@
 const mongoose = require("mongoose");
+const bcrypt = require("bcryptjs"); 
 
 const UserSchema = new mongoose.Schema(
   {
     firstName: { type: String, required: true },
     lastName: { type: String, required: true },
+    // If your controller uses "username", un-comment the line below:
+    // username: { type: String, unique: true, sparse: true }, 
+
     email: { type: String, required: true, unique: true },
     password: { type: String, required: true },
     role: {
@@ -11,7 +15,6 @@ const UserSchema = new mongoose.Schema(
       enum: ["admin", "teacher", "student"],
       default: "student",
     },
-    // Optional: If a student belongs to a specific class section
     enrolledClass: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Class",
@@ -20,5 +23,23 @@ const UserSchema = new mongoose.Schema(
   },
   { timestamps: true }
 );
+
+// --- CORRECTION: Removed 'next' parameter ---
+// When using 'async', just run your logic. 
+// If an error occurs, Mongoose automatically catches the rejected Promise.
+UserSchema.pre("save", async function () {
+  // Only hash the password if it has been modified (or is new)
+  if (!this.isModified("password")) {
+    return; // functions acting as 'next()' simply by returning
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  this.password = await bcrypt.hash(this.password, salt);
+});
+
+// Method to Compare Passwords
+UserSchema.methods.comparePassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
 
 module.exports = mongoose.model("User", UserSchema);

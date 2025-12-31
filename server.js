@@ -3,6 +3,7 @@ const { development } = require('./config/config');
 const app = require('./app');
 const { connectDB } = require('./config/db');
 const seedSubjects = require('./seeder/seeder'); // Import the seeder
+const seedAdmin = require('./seeder/adminSeeder'); // Import the seeder
 
 // In Mongoose, we don't strictly need to import models here to sync them.
 // They are registered automatically when used in routes/controllers.
@@ -16,6 +17,7 @@ const PORT = development.PORT || 5000;
     // 1. Connect to MongoDB
     await connectDB();
     await seedSubjects();
+    await seedAdmin();
     // 2. Start server
     const server = app.listen(PORT, () => {
       console.log(`✅ Server running on port ${PORT}`);
