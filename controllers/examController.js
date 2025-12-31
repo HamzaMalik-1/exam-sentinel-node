@@ -5,6 +5,7 @@ const BaseController = require('../bases/BaseController');
 const { StatusCodes } = require('http-status-codes');
 const { NotFoundError, BadRequestError } = require('../utils/ErrorHelpers/Errors');
 const sendResponse = require('../utils/ResponseHelpers/sendResponse');
+const AIHelper = require('../utils/AiHelper/AIHelper');
 
 class ExamController extends BaseController {
   constructor() {
@@ -74,14 +75,39 @@ class ExamController extends BaseController {
   });
 
   // @desc    Generate Questions using AI
-  generateAIQuestions = asyncHandler(async (req, res) => {
-    const { subject, numQuestions, type, prompt } = req.body;
-    if (!prompt) throw new BadRequestError("Prompt is required for AI generation");
+  // backend/controllers/examController.js
 
-    return sendResponse(res, StatusCodes.OK, "AI is processing your questions...", {
-        estimatedTime: "30 seconds"
-    });
-  });
+generateAIQuestions = asyncHandler(async (req, res) => {
+    const { subject, limit, type, description } = req.body;
+console.log(subject)
+    // Construct the prompt to ensure the AI returns a parseable JSON array
+    const prompt = `
+        Generate ${limit} ${type} questions for the subject "${subject}".
+        Topic details: ${description}
+        
+        Return ONLY a JSON array in the following format:
+        [
+          {
+            "question": "string",
+            "options": ["string", "string", "string", "string"],
+            "answer": "string (must match one of the options exactly)"
+          }
+        ]
+    `;
+
+    try {
+        const aiRawResponse = await AIHelper.generateAIResponse(prompt);
+        
+        // Clean the response (sometimes AI wraps JSON in ```json blocks)
+        const jsonString = aiRawResponse.replace(/```json|```/g, '').trim();
+        const questions = JSON.parse(jsonString);
+
+        return sendResponse(res, StatusCodes.OK, "Questions generated successfully", questions);
+    } catch (error) {
+        console.error("AI Generation Error:", error);
+        throw new BadRequestError("Failed to generate questions. " + error.message);
+    }
+});
 
   // @desc    Delete Exam
   deleteExam = asyncHandler(async (req, res) => {
