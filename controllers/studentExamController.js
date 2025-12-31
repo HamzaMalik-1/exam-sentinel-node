@@ -212,35 +212,68 @@ const submitExam = asyncHandler(async (req, res) => {
 const getMyResults = asyncHandler(async (req, res) => {
     const studentId = req.user._id;
 
-    // Fetch results and populate related exam and class info
     const results = await Result.find({ student: studentId })
-        .populate({
-            path: "exam",
-            select: "title", // Fetch the 'Test Name'
-        })
-        .populate({
-            path: "class",
-            select: "className", // Fetch the 'Class Name'
-        })
-        .sort({ submittedAt: -1 }); // Show most recent first
+        .populate("exam", "title")
+        .populate("class", "className")
+        .sort({ submittedAt: -1 });
 
-    // Format data to match your frontend MOCK_COMPLETED_EXAMS structure
     const formattedResults = results.map((record) => ({
         id: record._id,
-        className: record.class?.className || "General",
+        className: record.class?.className || "N/A",
         testName: record.exam?.title || "Deleted Exam",
-        submissionDate: record.submittedAt.toISOString().split("T")[0], // Format: YYYY-MM-DD
+        submissionDate: record.submittedAt.toISOString().split("T")[0],
         obtainedMarks: record.obtainedMarks,
         totalMarks: record.totalMarks,
         percentage: record.percentage,
-        status: record.status,
     }));
 
-    return sendResponse(
-        res,
-        StatusCodes.OK,
-        "Results fetched successfully",
-        formattedResults
-    );
+    return sendResponse(res, StatusCodes.OK, "Results fetched", formattedResults);
 });
-module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo,getExamForTaking, submitExam,getMyResults};
+
+// @desc    Get detailed breakdown of a specific result (Review View)
+// @route   GET /api/student/results/:resultId
+// @desc    Get detailed breakdown of a specific result (Review View)
+// @route   GET /api/student/results/:resultId
+const getResultDetails = asyncHandler(async (req, res) => {
+    const { resultId } = req.params;
+
+    // 1. Fetch result and populate the full Exam document to get question types/options
+    const result = await Result.findById(resultId)
+        .populate("exam") 
+        .populate("class", "className")
+        .lean();
+
+    if (!result) {
+        return res.status(StatusCodes.NOT_FOUND).json({ success: false, message: "Result not found" });
+    }
+
+    // 2. Map responses and merge them with the Exam's question metadata (type and options)
+    const formattedResponses = result.responses.map(resp => {
+        // Find the matching question in the original exam to get its type and options
+        const originalQuestion = result.exam.questions.find(
+            q => q._id.toString() === resp.questionId.toString()
+        );
+
+        return {
+            _id: resp._id,
+            questionId: resp.questionId,
+            questionText: resp.questionText,
+            userAnswer: resp.userAnswer,
+            isCorrect: resp.isCorrect,
+            obtainedMarks: resp.obtainedMarks,
+            // Fallback to "radio" if not found
+            type: originalQuestion ? originalQuestion.type : "radio",
+            options: originalQuestion ? originalQuestion.options : []
+        };
+    });
+
+    const formattedData = {
+        obtainedMarks: result.obtainedMarks,
+        totalMarks: result.totalMarks,
+        exam: { title: result.exam?.title },
+        responses: formattedResponses // This array now contains 'type' and 'options'
+    };
+
+    return sendResponse(res, StatusCodes.OK, "Result details fetched", formattedData);
+});
+module.exports = { getMyExams, registerInClass, getStudentProfile ,getExamInfo,getExamForTaking, submitExam,getMyResults,getResultDetails};
