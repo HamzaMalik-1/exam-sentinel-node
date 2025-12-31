@@ -168,40 +168,99 @@ const submitExam = asyncHandler(async (req, res) => {
     let totalObtainedMarks = 0;
     const totalPossibleMarks = exam.questions.length;
     const studentResponses = [];
+    const openEndQuestionsToGrade = [];
 
-    // 2. Grade Objective Questions
+    // 2. Grade Objective Questions & Collect Descriptive for AI
     exam.questions.forEach((q) => {
         const studentAns = answers[q._id];
         let isCorrect = false;
         let marks = 0;
+        let correctAns = q.correctAnswer; // For MCQs, use the stored correct answer
 
         if (q.type === "radio" || q.type === "checkbox") {
             isCorrect = JSON.stringify(studentAns) === JSON.stringify(q.correctAnswer);
-            marks = isCorrect ? 1 : 0; // Assuming 1 mark per question
-        } 
-        // Open-end questions default to 0 marks for now
-        
-        totalObtainedMarks += marks;
+            marks = isCorrect ? 1 : 0;
+            totalObtainedMarks += marks;
 
-        studentResponses.push({
-            questionId: q._id,
-            questionText: q.question,
-            userAnswer: studentAns,
-            isCorrect: isCorrect,
-            obtainedMarks: marks,
-        });
+            studentResponses.push({
+                questionId: q._id,
+                questionText: q.question,
+                userAnswer: studentAns,
+                correctAnswer: correctAns,
+                isCorrect: isCorrect,
+                obtainedMarks: marks,
+            });
+        } else if (q.type === "open end") {
+            // Collect descriptive questions for batch AI processing
+            openEndQuestionsToGrade.push({
+                id: q._id,
+                question: q.question,
+                answer: studentAns || "No answer provided"
+            });
+        }
     });
+
+    // 3. Grade Descriptive Questions using AI Helper
+    if (openEndQuestionsToGrade.length > 0) {
+        const aiPrompt = `
+            You are an exam grader. Grade the following descriptive answers.
+            For each question, provide:
+            1. A score (0 for incorrect, 0.5 for partial, 1 for fully correct).
+            2. A brief 'suggestedCorrectAnswer' for student feedback.
+
+            Return ONLY a valid JSON array in this exact format:
+            [{"id": "questionId", "score": 1, "suggestedCorrectAnswer": "..."}]
+
+            Questions and Answers:
+            ${JSON.stringify(openEndQuestionsToGrade)}
+        `;
+
+        try {
+            const aiResponse = await AIHelper.generateAIResponse(aiPrompt);
+            
+            // Clean markdown blocks if AI includes them
+            const cleanedJson = aiResponse.replace(/```json|```/g, '').trim();
+            const gradedResults = JSON.parse(cleanedJson);
+
+            gradedResults.forEach(gradedQ => {
+                const originalQ = openEndQuestionsToGrade.find(o => o.id.toString() === gradedQ.id.toString());
+                totalObtainedMarks += gradedQ.score;
+
+                studentResponses.push({
+                    questionId: gradedQ.id,
+                    questionText: originalQ.question,
+                    userAnswer: originalQ.answer,
+                    correctAnswer: gradedQ.suggestedCorrectAnswer, // Feedback from AI
+                    isCorrect: gradedQ.score >= 0.7, // Consider correct if score is high
+                    obtainedMarks: gradedQ.score,
+                });
+            });
+        } catch (error) {
+            console.error("AI Grading Error:", error.message);
+            // Fallback: If AI fails, record 0 marks for descriptive questions
+            openEndQuestionsToGrade.forEach(q => {
+                studentResponses.push({
+                    questionId: q.id,
+                    questionText: q.question,
+                    userAnswer: q.answer,
+                    correctAnswer: "Pending AI Review",
+                    isCorrect: false,
+                    obtainedMarks: 0,
+                });
+            });
+        }
+    }
 
     const percentage = (totalObtainedMarks / totalPossibleMarks) * 100;
 
-    // 3. Create Result Document using your schema
+    // 4. Create Result Document
     const result = await Result.create({
         student: studentId,
         exam: examId,
         class: enrollment ? enrollment.classId : null,
         obtainedMarks: totalObtainedMarks,
         totalMarks: totalPossibleMarks,
-        percentage: percentage,
+        percentage: Math.round(percentage),
         status: percentage >= 50 ? "Passed" : "Failed",
         responses: studentResponses
     });
