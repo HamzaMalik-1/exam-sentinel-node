@@ -8,31 +8,31 @@ const QuestionSchema = new mongoose.Schema({
     required: true,
   },
   options: {
-    type: [String], // Array of strings e.g. ["Yes", "No"]
+    type: [String], 
     default: [],
   },
-  // Stores the correct answer key for grading
   correctAnswer: { 
-    type: mongoose.Schema.Types.Mixed, // Can be String (radio) or Array (checkbox)
+    type: mongoose.Schema.Types.Mixed, 
     required: true 
   }, 
-  marks: { type: Number, default: 1 } // Points for this question
+  marks: { type: Number, default: 1 } 
 });
 
 const ExamSchema = new mongoose.Schema(
   {
     title: { type: String, required: true },
     description: { type: String },
-    timeLimit: { type: Number, required: true }, // in minutes
-    
-    // CORRECTION: Changed type to Number to match Subject.js
+    timeLimit: { type: Number, required: true }, 
+
+    // FIX: Reverted to ObjectId. 
+    // "69545e2192477f1f02ee534b" is a String/ObjectId, NOT a Number.
     subjectId: { 
-      type: Number, 
+      type: mongoose.Schema.Types.ObjectId, 
       required: true, 
       ref: "Subject" 
     }, 
     
-    questions: [QuestionSchema], // Embedded Questions
+    questions: [QuestionSchema], 
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

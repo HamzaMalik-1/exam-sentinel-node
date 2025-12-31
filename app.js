@@ -13,6 +13,7 @@ const authRouter = require('./routes/authRoutes');
 const dropdownRouter = require('./routes/dropdownRoutes');
 const classRouter = require('./routes/classRoutes');
 const userRouter = require('./routes/userRoutes');
+const examRouter = require('./routes/examRoutes');
 // const productRouter = require('./routes/productRoutes'); 
 // const subjectRouter = require('./routes/subjectRoutes'); // Uncomment when ready
 // const examRouter = require('./routes/examRoutes');       // Uncomment when ready
@@ -59,6 +60,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/dropdown', dropdownRouter);
 app.use('/api/classes', classRouter);
 app.use('/api/users', userRouter);
+app.use('/api/exams', examRouter);
 // app.use('/api/product', productRouter);
 // app.use('/api/subjects', subjectRouter); 
 // app.use('/api/exams', examRouter);
