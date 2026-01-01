@@ -6,18 +6,43 @@ const StudentResponseSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId, 
     required: true 
   }, // Link to specific question inside Exam
-  questionText: String, // Store text in case exam questions are updated/deleted later
-  userAnswer: mongoose.Schema.Types.Mixed, // Supports String, Array (checkbox), or Number
-  // ✅ Added field to store the AI's suggested answer or the MCQ key
-  correctAnswer: mongoose.Schema.Types.Mixed, 
+  questionText: { 
+    type: String, 
+    required: true 
+  }, // Store text in case exam questions are updated later
+  
+  // ✅ Crucial: Store the question type ("radio", "checkbox", "open end")
+  // Allows frontend to group/render without re-querying the Exam
+  questionType: { 
+    type: String, 
+    required: true 
+  },
+  
+  // ✅ Store original options snapshot for accuracy
+  options: { 
+    type: [String], 
+    default: [] 
+  },
+  
+  // Supports String (radio/open end) or Array (checkbox)
+  userAnswer: { 
+    type: mongoose.Schema.Types.Mixed 
+  },
+  
+  // Stores MCQ correct key or AI-generated feedback
+  correctAnswer: { 
+    type: mongoose.Schema.Types.Mixed 
+  },
+  
   isCorrect: { 
     type: Boolean, 
     default: false 
   },
+  
   obtainedMarks: { 
     type: Number, 
     default: 0 
-  },
+  }
 });
 
 const ResultSchema = new mongoose.Schema(
@@ -35,7 +60,7 @@ const ResultSchema = new mongoose.Schema(
     class: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "Class",
-    },
+    }, // ✅ Reference to Class for result population
     obtainedMarks: { 
       type: Number, 
       required: true 

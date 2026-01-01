@@ -156,98 +156,89 @@ const getExamForTaking = asyncHandler(async (req, res) => {
 // @desc    Submit Exam and Grade via AI
 // @route   POST /api/student/submit-exam
 const submitExam = asyncHandler(async (req, res) => {
-    const { examId, answers } = req.body;
+    const { examId, answers } = req.body; 
     const studentId = req.user._id;
 
-    // 1. Fetch Exam and Enrollment to get the Class ID
+    // 1. Fetch metadata snapshot
     const exam = await Exam.findById(examId);
     const enrollment = await Enrollment.findOne({ studentId, status: 'active' });
 
-    if (!exam) return res.status(StatusCodes.NOT_FOUND).json({ success: false, message: "Exam not found" });
+    if (!exam) return res.status(404).json({ success: false, message: "Exam not found" });
 
     let totalObtainedMarks = 0;
     const totalPossibleMarks = exam.questions.length;
     const studentResponses = [];
-    const openEndQuestionsToGrade = [];
+    const openEndQueue = [];
 
-    // 2. Grade Objective Questions & Collect Descriptive for AI
+    // 2. Loop through questions to format answers and prepare AI queue
     exam.questions.forEach((q) => {
-        const studentAns = answers[q._id];
+        const rawAns = answers[q._id.toString()];
+        let formattedUserAnswer = "";
         let isCorrect = false;
         let marks = 0;
-        let correctAns = q.correctAnswer; // For MCQs, use the stored correct answer
 
-        if (q.type === "radio" || q.type === "checkbox") {
-            isCorrect = JSON.stringify(studentAns) === JSON.stringify(q.correctAnswer);
+        // --- Formatting Logic by Type ---
+        if (q.type === "radio") {
+            // Radio: Single string answer
+            formattedUserAnswer = typeof rawAns === "string" ? rawAns : "";
+            isCorrect = formattedUserAnswer === q.correctAnswer;
             marks = isCorrect ? 1 : 0;
-            totalObtainedMarks += marks;
+        } 
+        else if (q.type === "checkbox") {
+            // Checkbox: Comma separated string
+            const studentAnsArray = Array.isArray(rawAns) ? rawAns : (rawAns ? [rawAns] : []);
+            formattedUserAnswer = studentAnsArray.join(", ");
 
-            studentResponses.push({
+            // Safe sorting to prevent ".sort is not a function" error
+            const studentSorted = [...studentAnsArray].sort();
+            const correctAnsArray = Array.isArray(q.correctAnswer) 
+                ? q.correctAnswer 
+                : (q.correctAnswer ? [q.correctAnswer] : []);
+            const correctSorted = [...correctAnsArray].sort();
+
+            isCorrect = JSON.stringify(studentSorted) === JSON.stringify(correctSorted);
+            marks = isCorrect ? 1 : 0;
+        } 
+        else if (q.type === "open end") {
+            // Open End: Detailed text answer
+            formattedUserAnswer = rawAns || "No answer provided";
+            openEndQueue.push({
                 questionId: q._id,
                 questionText: q.question,
-                userAnswer: studentAns,
-                correctAnswer: correctAns,
-                isCorrect: isCorrect,
-                obtainedMarks: marks,
-            });
-        } else if (q.type === "open end") {
-            // Collect descriptive questions for batch AI processing
-            openEndQuestionsToGrade.push({
-                id: q._id,
-                question: q.question,
-                answer: studentAns || "No answer provided"
+                studentAnswer: formattedUserAnswer
             });
         }
+
+        totalObtainedMarks += marks;
+
+        studentResponses.push({
+            questionId: q._id,
+            questionText: q.question,
+            questionType: q.type,
+            options: q.options || [],
+            userAnswer: formattedUserAnswer,
+            correctAnswer: q.correctAnswer, 
+            isCorrect: isCorrect,
+            obtainedMarks: marks,
+        });
     });
 
-    // 3. Grade Descriptive Questions using AI Helper
-    if (openEndQuestionsToGrade.length > 0) {
-        const aiPrompt = `
-            You are an exam grader. Grade the following descriptive answers.
-            For each question, provide:
-            1. A score (0 for incorrect, 0.5 for partial, 1 for fully correct).
-            2. A brief 'suggestedCorrectAnswer' for student feedback.
-
-            Return ONLY a valid JSON array in this exact format:
-            [{"id": "questionId", "score": 1, "suggestedCorrectAnswer": "..."}]
-
-            Questions and Answers:
-            ${JSON.stringify(openEndQuestionsToGrade)}
-        `;
-
+    // 3. Process AI Evaluation for Descriptive Questions
+    if (openEndQueue.length > 0) {
         try {
-            const aiResponse = await AIHelper.generateAIResponse(aiPrompt);
+            const aiFeedback = await getAIGradeBatch(openEndQueue); 
             
-            // Clean markdown blocks if AI includes them
-            const cleanedJson = aiResponse.replace(/```json|```/g, '').trim();
-            const gradedResults = JSON.parse(cleanedJson);
-
-            gradedResults.forEach(gradedQ => {
-                const originalQ = openEndQuestionsToGrade.find(o => o.id.toString() === gradedQ.id.toString());
-                totalObtainedMarks += gradedQ.score;
-
-                studentResponses.push({
-                    questionId: gradedQ.id,
-                    questionText: originalQ.question,
-                    userAnswer: originalQ.answer,
-                    correctAnswer: gradedQ.suggestedCorrectAnswer, // Feedback from AI
-                    isCorrect: gradedQ.score >= 0.7, // Consider correct if score is high
-                    obtainedMarks: gradedQ.score,
-                });
+            aiFeedback.forEach(feedback => {
+                const respIndex = studentResponses.findIndex(r => r.questionId.toString() === feedback.questionId.toString());
+                if (respIndex !== -1) {
+                    studentResponses[respIndex].obtainedMarks = feedback.score;
+                    studentResponses[respIndex].correctAnswer = feedback.suggestedSolution; // Detailed solution
+                    studentResponses[respIndex].isCorrect = feedback.score >= 0.7; 
+                    totalObtainedMarks += feedback.score;
+                }
             });
         } catch (error) {
-            console.error("AI Grading Error:", error.message);
-            // Fallback: If AI fails, record 0 marks for descriptive questions
-            openEndQuestionsToGrade.forEach(q => {
-                studentResponses.push({
-                    questionId: q.id,
-                    questionText: q.question,
-                    userAnswer: q.answer,
-                    correctAnswer: "Pending AI Review",
-                    isCorrect: false,
-                    obtainedMarks: 0,
-                });
-            });
+            console.error("AI Batch Grading Error:", error);
         }
     }
 
@@ -258,35 +249,53 @@ const submitExam = asyncHandler(async (req, res) => {
         student: studentId,
         exam: examId,
         class: enrollment ? enrollment.classId : null,
-        obtainedMarks: totalObtainedMarks,
+        obtainedMarks: Number(totalObtainedMarks.toFixed(2)),
         totalMarks: totalPossibleMarks,
         percentage: Math.round(percentage),
         status: percentage >= 50 ? "Passed" : "Failed",
         responses: studentResponses
     });
 
-    res.status(StatusCodes.CREATED).json({ success: true, data: result });
+    res.status(201).json({ success: true, data: result });
 });
-
 const getMyResults = asyncHandler(async (req, res) => {
     const studentId = req.user._id;
 
+    // 1. Fetch results for the specific student
+    // .populate() must match the field names defined in your Result Schema
     const results = await Result.find({ student: studentId })
         .populate("exam", "title")
-        .populate("class", "className")
-        .sort({ submittedAt: -1 });
+        .populate("class", "className") // ✅ Populates the className from the Class model
+        .sort({ submittedAt: -1 })
+        .lean(); // Use lean() for faster read-only performance
 
+    // 2. Format the results for the frontend table
     const formattedResults = results.map((record) => ({
         id: record._id,
-        className: record.class?.className || "N/A",
+        // ✅ record.class matches the schema field; .className matches the Class model field
+        className: record.class?.className || "N/A", 
         testName: record.exam?.title || "Deleted Exam",
-        submissionDate: record.submittedAt.toISOString().split("T")[0],
-        obtainedMarks: record.obtainedMarks,
-        totalMarks: record.totalMarks,
-        percentage: record.percentage,
+        
+        // Safely check if submittedAt exists and format the date
+        submissionDate: record.submittedAt 
+            ? new Date(record.submittedAt).toISOString().split("T")[0] 
+            : "N/A",
+            
+        obtainedMarks: record.obtainedMarks ?? 0, // Fallback to 0 if null
+        totalMarks: record.totalMarks ?? 0,
+        
+        // Match the field name 'percentage' from your DB object and round it
+        percentage: record.percentage !== undefined ? Math.round(record.percentage) : 0,
+        
+        status: record.status || "N/A" // Ensure status ("Passed"/"Failed") is included
     }));
 
-    return sendResponse(res, StatusCodes.OK, "Results fetched", formattedResults);
+    // 3. Return the response
+    return res.status(StatusCodes.OK).json({ 
+        success: true, 
+        message: "Results fetched successfully", 
+        data: formattedResults 
+    });
 });
 
 // @desc    Get detailed breakdown of a specific result (Review View)
@@ -296,54 +305,50 @@ const getMyResults = asyncHandler(async (req, res) => {
 const getResultDetails = asyncHandler(async (req, res) => {
     const { resultId } = req.params;
 
-    // 1. Fetch result and populate the full Exam document to get question types/options
+    // 1. Fetch result and only populate the top-level Exam/Class info
+    // We don't need the detailed exam questions anymore because we have snapshots
     const result = await Result.findById(resultId)
-        .populate("exam") 
+        .populate("exam", "title subject") 
         .populate("class", "className")
         .lean();
 
     if (!result) {
-        return res.status(StatusCodes.NOT_FOUND).json({ success: false, message: "Result not found" });
+        return res.status(StatusCodes.NOT_FOUND).json({ 
+            success: false, 
+            message: "Result not found" 
+        });
     }
 
-    // 2. Map responses and merge them with the Exam's question metadata (type, options, and correctness)
-    const formattedResponses = result.responses.map(resp => {
-        // Find the matching question in the original exam to get its structural metadata
-        const originalQuestion = result.exam.questions.find(
-            q => q._id.toString() === resp.questionId.toString()
-        );
-
-        return {
-            _id: resp._id,
-            questionId: resp.questionId,
-            questionText: resp.questionText,
-            userAnswer: resp.userAnswer,
-            // ✅ Crucial: Send the correct answer (stored in Result during submit) to the frontend
-            correctAnswer: resp.correctAnswer, 
-            isCorrect: resp.isCorrect,
-            obtainedMarks: resp.obtainedMarks,
-            // Use metadata from exam document for UI rendering
-            type: originalQuestion ? originalQuestion.type : "radio",
-            options: originalQuestion ? originalQuestion.options : []
-        };
-    });
+    // 2. Map responses directly from the saved snapshot in the Result document
+    const formattedResponses = result.responses.map(resp => ({
+        _id: resp._id,
+        questionId: resp.questionId,
+        questionText: resp.questionText,
+        userAnswer: resp.userAnswer,
+        correctAnswer: resp.correctAnswer, 
+        isCorrect: resp.isCorrect,
+        obtainedMarks: resp.obtainedMarks,
+        // ✅ Use the snapshot fields we added to the Result Schema
+        type: resp.questionType || "radio", 
+        options: resp.options || []
+    }));
 
     const formattedData = {
         obtainedMarks: result.obtainedMarks,
         totalMarks: result.totalMarks,
         percentage: result.percentage,
         status: result.status,
+        className: result.class?.className || "N/A",
         exam: { 
-            title: result.exam?.title,
-            subject: result.exam?.subject
+            title: result.exam?.title || "Deleted Exam",
+            subject: result.exam?.subject || "N/A"
         },
         responses: formattedResponses 
     };
 
-    // Replace sendResponse with your standard JSON return if necessary
     return res.status(StatusCodes.OK).json({ 
         success: true, 
-        message: "Result details fetched", 
+        message: "Result details fetched successfully", 
         data: formattedData 
     });
 });
